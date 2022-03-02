@@ -67,7 +67,7 @@ OPTICAL_FLOW_PARAMS = dict(
 )
 
 
-def log(*args, **kwargs):
+def __log(*args, **kwargs):
     print(*args, **kwargs)
     input()
 
@@ -153,6 +153,13 @@ def _build_impl(frame_sequence: pims.FramesSequence,
 
 
 def _get_corners_for_frame(frame: np.array, use_pyramid=True) -> np.ndarray:
+    """
+    Find corners for frame using pyramids.
+
+    :param frame: ndarray of shape (height, width)
+    :param use_pyramid: whether to use pyramids
+    :return: ndarray of shape (-1, 2) with corners
+    """
     all_corners: np.ndarray
 
     if use_pyramid:
@@ -180,6 +187,13 @@ def _get_corners_for_frame(frame: np.array, use_pyramid=True) -> np.ndarray:
 
 
 def _get_corners_for_single_frame(frame: np.array, mask: np.array = None) -> np.array:
+    """
+    Detect corners on the frame using opencv.
+
+    :param frame: ndarray of shape (height, width)
+    :param mask: mask as in [cv2.goodFeaturesToTrack]
+    :return: ndarray of shape (-1, 2) with corners
+    """
     block_size = CORNER_BLOCK_SIZE
 
     prepared_frame = _preprocess_image(frame)
@@ -196,14 +210,16 @@ def _get_corners_for_single_frame(frame: np.array, mask: np.array = None) -> np.
     return corners.reshape(-1, 2)
 
 
-def _preprocess_image(frame: np.array) -> np.array:
-    prepared_frame = utils.smooth(frame, ksize=7)
-    prepared_frame = utils.sharpen(prepared_frame)
-
-    return prepared_frame
-
-
 def _update_mask(mask: np.ndarray, point: np.ndarray):
+    """
+    Updates mask with zeros around given point.
+    Is used to discard old corners that are already being tracked.
+
+    Mutates mask in-place.
+
+    :param mask: array of shape (height, width)
+    :param point: array of shape (1, 2) representing (x, y) coordinates on image.
+    """
     (x, y) = np.int32(point)
     (h, w) = mask.shape
     y_from = utils.coerce_in(y - CORNER_MIN_DISTANCE_PX, 0, h)
@@ -213,10 +229,25 @@ def _update_mask(mask: np.ndarray, point: np.ndarray):
     mask[y_from:y_to, x_from:x_to] = 0
 
 
+def _preprocess_image(frame: np.array) -> np.array:
+    """
+    Preprocess image for better tracking.
+
+    :param frame: ndarray of shape (height, width)
+    :return: processed image of shape (height, width)
+    """
+    prepared_frame = utils.smooth(frame, ksize=7)
+    prepared_frame = utils.sharpen(prepared_frame)
+
+    return prepared_frame
+
+
 def _build_pyramid_for_frame(frame: np.array) -> List[np.array]:
     """
     Build pyramid for the frame.
-    Result is list of frames from the smallest image to largest.
+
+    :param frame: ndarray of shape (height, width)
+    :return: list of scaled frames from the smallest image to largest.
     """
 
     (height, width) = np.shape(frame)
@@ -240,11 +271,18 @@ def _build_pyramid_for_frame(frame: np.array) -> List[np.array]:
 
 def _pyramid_find_corners_for_layer(
         pyramid: List[np.array],
-        layer: int
+        layer_index: int
 ) -> np.ndarray:
+    """
+    Detect and scale back corners for given pyramid layer.
+
+    :param pyramid: pyramid as returned in [_build_pyramid_for_frame]
+    :param layer_index: layer index
+    :return: ndarray of shape (-1, 2) with points
+    """
     pyramid_size = len(pyramid)
-    corners = _get_corners_for_single_frame(pyramid[layer])
-    corners = _rescale_corners(corners, pyramid_size, layer)
+    corners = _get_corners_for_single_frame(pyramid[layer_index])
+    corners = _rescale_corners(corners, pyramid_size, layer_index)
     return corners
 
 
@@ -254,7 +292,7 @@ def _filter_close_corners(corners: np.ndarray, radius: int) -> np.ndarray:
 
     :param corners: array of points with shape (-1, 2)
     :param radius: threshold in which corners will be joint
-    :return: filtered corners, np.array of shape (-1, 2)
+    :return: filtered corners, ndarray of shape (-1, 2)
     """
     used = np.ones(len(corners), dtype=bool)
 
@@ -277,13 +315,24 @@ def _filter_close_corners(corners: np.ndarray, radius: int) -> np.ndarray:
 
 
 def _diminish_frame_size(frame: np.array) -> np.array:
+    """
+    Scale one step down image for pyramid.
+
+    :param frame: ndarray of shape (height, width)
+    :return: ndarray with scaled down image of shape (height // 2, width // 2)
+    """
     return cv2.pyrDown(frame)
 
 
 def _rescale_corners(corners: np.ndarray, pyramid_size: int, layer: int) -> np.ndarray:
     """
-    Rescale corners to the original image coordinates.
-    Lower layer is lower image.
+    Rescale corners in pyramid to the original image coordinates.
+    Lower layer is smaller image.
+
+    :param corners: ndarray of shape (-1, 2)
+    :param pyramid_size: size of pyramid
+    :param layer: layer index
+    :return: ndarray of scaled corners with shape (-1, 2)
     """
     coef = _pyramid_coef(pyramid_size, layer)
     return np.float32(corners * coef)
@@ -293,7 +342,11 @@ def _rescale_corners(corners: np.ndarray, pyramid_size: int, layer: int) -> np.n
 def _pyramid_coef(pyramid_size: int, layer: int) -> int:
     """
     Return scaling coefficient of the pyramid layer.
-    Lower layer is lower image.
+    Lower layer is smaller image.
+
+    :param pyramid_size: size of the pyramid
+    :param layer: layer index
+    :return: scaling coefficient of the pyramid
     """
     return 2 ** (pyramid_size - layer - 1)
 
